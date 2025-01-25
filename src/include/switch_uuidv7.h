@@ -1,14 +1,44 @@
 /*
- * switch_uuidv7.h uuidv7
+ * switch_uuidv7.h UUIDv7 generation functions, copied AS IS from https://github.com/LiosK/uuidv7-h
+ * with minor fixes to make it compile with FreeSWITCH.
 */
-#include <switch.h>
 
-#undef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 199309L
+/**
+ * @file
+ *
+ * uuidv7.h - Single-file C/C++ UUIDv7 Library
+ *
+ * @version   v0.1.6
+ * @author    LiosK
+ * @copyright Licensed under the Apache License, Version 2.0
+ * @see       https://github.com/LiosK/uuidv7-h
+ */
+/*
+ * Copyright 2022 LiosK
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#ifndef UUIDV7_H_BAEDKYFQ
+#define UUIDV7_H_BAEDKYFQ
 
 #include <stddef.h>
 #include <stdint.h>
 
+/**
+ * @name Status codes returned by uuidv7_generate()
+ *
+ * @{
+ */
 
 /**
  * Indicates that the `unix_ts_ms` passed was used because no preceding UUID was
@@ -49,11 +79,17 @@
  */
 #define UUIDV7_STATUS_ERR_TIMESTAMP_OVERFLOW (-2)
 
+/** @} */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/**
+ * @name Low-level primitives
+ *
+ * @{
+ */
 
 /**
  * Generates a new UUIDv7 from the given Unix time, random bytes, and previous
@@ -78,17 +114,18 @@ extern "C" {
  *                    monotonic order of UUIDs or fine-tune the generation
  *                    process.
  */
-
-static inline int8_t uuidv7_generate(uint8_t *uuid_out, uint64_t unix_ts_ms,const uint8_t *rand_bytes,const uint8_t *uuid_prev) {
-  int8_t status;
-  uint64_t timestamp = 0;
+static inline int8_t uuidv7_generate(uint8_t *uuid_out, uint64_t unix_ts_ms,
+                                     const uint8_t *rand_bytes,
+                                     const uint8_t *uuid_prev) {
   static const uint64_t MAX_TIMESTAMP = ((uint64_t)1 << 48) - 1;
   static const uint64_t MAX_COUNTER = ((uint64_t)1 << 42) - 1;
+
+  int8_t status;
+  uint64_t timestamp = 0;
 
   if (unix_ts_ms > MAX_TIMESTAMP) {
     return UUIDV7_STATUS_ERR_TIMESTAMP;
   }
-
 
   if (uuid_prev == NULL) {
     status = UUIDV7_STATUS_UNPRECEDENTED;
@@ -162,9 +199,71 @@ static inline int uuidv7_status_n_rand_consumed(int8_t status) {
   return status == UUIDV7_STATUS_COUNTER_INC ? 4 : 10;
 }
 
+/**
+ * Encodes a UUID in the 8-4-4-4-12 hexadecimal string representation.
+ *
+ * @param uuid        16-byte byte array representing the UUID to encode.
+ * @param string_out  Character array where the encoded string is stored. Its
+ *                    length must be 37 (36 digits + NUL) or longer.
+ */
+static inline void uuidv7_to_string(const uint8_t *uuid, char *string_out) {
+  static const char DIGITS[] = "0123456789abcdef";
+  for (int i = 0; i < 16; i++) {
+    uint_fast8_t e = uuid[i];
+    *string_out++ = DIGITS[e >> 4];
+    *string_out++ = DIGITS[e & 15];
+    if (i == 3 || i == 5 || i == 7 || i == 9) {
+      *string_out++ = '-';
+    }
+  }
+  *string_out = '\0';
+}
+
+/**
+ * Decodes the 8-4-4-4-12 hexadecimal string representation of a UUID.
+ *
+ * @param string    37-byte (36 digits + NUL) character array representing the
+ *                  8-4-4-4-12 hexadecimal string representation.
+ * @param uuid_out  16-byte byte array where the decoded UUID is stored.
+ * @return          Zero on success or non-zero integer on failure.
+ */
+static inline int uuidv7_from_string(const char *string, uint8_t *uuid_out) {
+  for (int i = 0; i < 32; i++) {
+    char c = *string++;
+    // clang-format off
+    uint8_t x = c == '0' ?  0 : c == '1' ?  1 : c == '2' ?  2 : c == '3' ?  3
+              : c == '4' ?  4 : c == '5' ?  5 : c == '6' ?  6 : c == '7' ?  7
+              : c == '8' ?  8 : c == '9' ?  9 : c == 'a' ? 10 : c == 'b' ? 11
+              : c == 'c' ? 12 : c == 'd' ? 13 : c == 'e' ? 14 : c == 'f' ? 15
+              : c == 'A' ? 10 : c == 'B' ? 11 : c == 'C' ? 12 : c == 'D' ? 13
+              : c == 'E' ? 14 : c == 'F' ? 15 : 0xff;
+    // clang-format on
+    if (x == 0xff) {
+      return -1; // invalid digit
+    }
+
+    if ((i & 1) == 0) {
+      uuid_out[i >> 1] = x << 4; // even i => hi 4 bits
+    } else {
+      uuid_out[i >> 1] |= x; // odd i => lo 4 bits
+    }
+
+    if ((i == 7 || i == 11 || i == 15 || i == 19) && (*string++ != '-')) {
+      return -1; // invalid format
+    }
+  }
+  if (*string != '\0') {
+    return -1; // invalid length
+  }
+  return 0; // success
+}
+
+/** @} */
 
 /**
  * @name High-level APIs that require platform integration
+ *
+ * @{
  */
 
 /**
@@ -187,10 +286,39 @@ static inline int uuidv7_status_n_rand_consumed(int8_t status) {
  *                  process. The implementation-dependent code must be out of
  *                  the range of `int8_t` and negative if it reports an error.
  */
+int uuidv7_new(uint8_t *uuid_out);
 
-SWITCH_DECLARE(int) uuidv7_new(uint8_t *uuid_out);
+/**
+ * Generates an 8-4-4-4-12 hexadecimal string representation of new UUIDv7.
+ *
+ * @param string_out  Character array where the encoded string is stored. Its
+ *                    length must be 37 (36 digits + NUL) or longer.
+ * @return            Return value of `uuidv7_new()`.
+ * @note              Provide a concrete `uuidv7_new()` implementation to enable
+ *                    this function.
+ */
+static inline int uuidv7_new_string(char *string_out) {
+  uint8_t uuid[16];
+  int result = uuidv7_new(uuid);
+  uuidv7_to_string(uuid, string_out);
+  return result;
+}
 
+/** @} */
 
 #ifdef __cplusplus
 } /* extern "C" { */
 #endif
+
+#endif /* #ifndef UUIDV7_H_BAEDKYFQ */
+
+/* For Emacs:
+ * Local Variables:
+ * mode:c
+ * indent-tabs-mode:t
+ * tab-width:4
+ * c-basic-offset:4
+ * End:
+ * For VIM:
+ * vim:set softtabstop=4 shiftwidth=4 tabstop=4 noet:
+ */
